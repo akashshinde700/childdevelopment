@@ -1,0 +1,1272 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ============ SAAS TENANT ROOT ============
+// One row per clinic business (the SaaS customer). Every table below carries
+// a nullable `organizationId` for now — Phase A of the multi-tenant
+// migration is purely additive (add the column, backfill existing rows to
+// the single pre-existing organization, then a later phase makes it
+// required once every write path sets it). See SAAS-TRANSFORMATION-PLAN.md.
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  logo      String?  @db.LongText
+  status    String   @default("active") // active, suspended, cancelled
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches                   Branch[]
+  users                      User[]
+  roles                      Role[]
+  systemConfigs              SystemConfig[]
+  centerSettings             CenterSettings[]
+  patients                   Patient[]
+  appointments               Appointment[]
+  packages                   Package[]
+  packageTherapyTypes        PackageTherapyType[]
+  patientPackages            PatientPackage[]
+  patientPackageTherapyTypes PatientPackageTherapyType[]
+  therapySessions            TherapySession[]
+  assessments                Assessment[]
+  invoices                   Invoice[]
+  invoiceItems               InvoiceItem[]
+  services                   Service[]
+  payments                   Payment[]
+  employees                  Employee[]
+  employeeDocuments          EmployeeDocument[]
+  attendances                Attendance[]
+  leaves                     Leave[]
+  leavePolicies              LeavePolicy[]
+  payrollRecords             PayrollRecord[]
+  therapistRates             TherapistRate[]
+  organizationDefaultRates   OrganizationDefaultRate[]
+  therapistEarnings          TherapistEarning[]
+  expenses                   Expense[]
+  whatsappLogs               WhatsAppLog[]
+  leads                      Lead[]
+  actionLogs                 ActionLog[]
+  notifications              Notification[]
+  activityLogs               ActivityLog[]
+  sharedDocuments            SharedDocument[]
+
+  subscription Subscription?
+
+  @@index([status])
+}
+
+// ============ BRANCH MANAGEMENT ============
+
+model Branch {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  name           String
+  code           String        @unique // e.g. "BR1", "BR2"
+  address        String?
+  phone          String?
+  email          String?
+  city           String?
+  state          String?
+  pincode        String?
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  users         User[]
+  patients      Patient[]
+  packages      Package[]
+  invoices      Invoice[]
+  payments      Payment[]
+  expenses      Expense[]
+  employees     Employee[]
+  leads         Lead[]
+  whatsappLogs  WhatsAppLog[]
+  leavePolicies LeavePolicy[]
+  therapistRates           TherapistRate[]
+  organizationDefaultRates OrganizationDefaultRate[]
+
+  @@index([organizationId])
+}
+
+// ============ USER MANAGEMENT ============
+
+model User {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  email          String        @unique
+  password       String
+  // Reversible copy of the last password we generated for this user (org
+  // creation / platform-admin reset) — encrypted, see src/lib/secret-crypto.ts.
+  // Auth NEVER reads this; it exists only so Platform Admin can show/copy
+  // the login password again in the Organizations list. Null for accounts
+  // whose password was set some other way (e.g. user-initiated change).
+  generatedPasswordEnc String?
+  name           String
+  phone          String?
+  role           String        @default("receptionist") // super_admin, admin, therapist_speech, therapist_ot, therapist_behavioral, therapist_remedial, psychologist, parent
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id])
+  patientId      String? // For parent role - links to their child
+  therapyType    String? // For therapist roles - their specialization
+  // A non-therapist account (e.g. the clinic owner as super_admin, or a
+  // custom role) that also runs therapy sessions: keeps its own role and
+  // permissions but appears in every therapist list. Specialization in therapyType.
+  takesSessions  Boolean       @default(false)
+  // The job this person also does, when it differs from the account's access
+  // role — e.g. an owner whose `role` is super_admin and who also works as a
+  // Pediatric Physiotherapist. Display/scheduling only: permissions ALWAYS
+  // come from `role` alone, never from this.
+  secondaryRole  String?
+  avatar         String?
+  isActive       Boolean       @default(true)
+  lastLogin      DateTime?
+  // Expo push token for the mobile app — set via PUT /api/auth/push-token
+  // after login/app-open. Nullable/best-effort: web-only users never set
+  // this, and createNotification() silently skips the push send if absent.
+  pushToken      String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  activityLogs ActivityLog[]
+  employee     Employee?
+
+  @@index([patientId])
+  @@index([organizationId])
+}
+
+model ActivityLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action         String
+  module         String?
+  details        String?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId])
+}
+
+// ============ PATIENT REGISTRATION ============
+
+model Patient {
+  id               String        @id @default(cuid())
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id])
+  // Auto generated like CM-0001. Unique PER ORGANIZATION (compound below) —
+  // a global unique made every second clinic's first patient collide with
+  // clinic #1's CM-0001 (multi-tenant numbering bug).
+  patientId        String
+  branchId         String?
+  branch           Branch?       @relation(fields: [branchId], references: [id])
+  registrationDate DateTime      @default(now())
+  childName        String
+  gender           String // Male, Female, Other
+  dateOfBirth      DateTime
+  fatherName       String?
+  motherName       String?
+  parentName       String?
+  mobile           String
+  alternateNumber  String?
+  email            String?
+  address          String?
+  city             String?
+  state            String?
+  pincode          String?
+  schoolName       String?
+  class            String?
+  referredBy       String?
+  diagnosis        String? // Text diagnosis (e.g. "Autism", "ADHD") — set via form or Excel import
+  diagnosisReport  String? // Uploaded diagnosis-report file path (e.g. "/uploads/123-report.pdf")
+  medicalHistory   String?
+  birthHistory     String?
+  photo            String?
+  aadhaar          String?       @db.VarChar(20) // Aadhaar card number, unique per organization
+  isActive         Boolean       @default(true)
+  status           String        @default("active") // active, inactive, discharged
+  isDeleted        Boolean       @default(false)
+  deletedBy        String?
+  deletedAt        DateTime?
+  deletionReason   String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  appointments    Appointment[]
+  packages        PatientPackage[]
+  payments        Payment[]
+  assessments     Assessment[]
+  therapySessions TherapySession[]
+  invoices        Invoice[]
+
+  @@unique([organizationId, patientId])
+  @@unique([organizationId, aadhaar])
+  @@index([status])
+  @@index([createdAt])
+  @@index([organizationId])
+}
+
+// ============ APPOINTMENT MANAGEMENT ============
+
+model Appointment {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  patientId      String
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  therapistId    String?
+  roomId         String?
+  title          String
+  date           DateTime
+  startTime      String // "09:00"
+  endTime        String // "10:00"
+  status         String        @default("scheduled") // scheduled, confirmed, completed, rescheduled, cancelled, no_show, therapist_leave, holiday
+  type           String? // consultation, therapy, assessment
+  notes          String?
+  reminderSent   Boolean       @default(false)
+
+  // ── Package-generated session linkage ──
+  // patientPackageId is set for EVERY appointment auto-generated from a
+  // package assignment (bundle or single-type) — this is the canonical link
+  // used to reconcile "sessions purchased" vs "sessions actually scheduled"
+  // (see GET /api/patient-packages). patientPackageTherapyTypeId is set ONLY
+  // for a bundled package's specific therapy-type block, so the therapist
+  // dropdown can be filtered to that type and session numbering can reset
+  // per group (e.g. "Speech Therapy #1" is independent of "OT #1").
+  therapyType                 String?
+  sessionNumber               Int?
+  patientPackageId            String?
+  patientPackage              PatientPackage?            @relation(fields: [patientPackageId], references: [id], onDelete: SetNull)
+  patientPackageTherapyTypeId String?
+  patientPackageTherapyType   PatientPackageTherapyType? @relation(fields: [patientPackageTherapyTypeId], references: [id], onDelete: SetNull)
+
+  // Session completion details (Task 7)
+  sessionFocus     String?
+  goalTargeted     String?
+  progressAchieved String?
+  sessionRemarks   String?
+
+  // ── Parent review of a completed session ──
+  // Written only by the child's parent (POST /api/appointments/[id]/review),
+  // never by the therapist who ran the session.
+  parentRating     Int? // 1–5 stars
+  parentReview     String?   @db.Text
+  parentReviewedAt DateTime?
+
+  // ── Historical data entry (migration mode) ──
+  // Allows back-dating appointments for records that predate the system.
+  isHistorical Boolean   @default(false)
+  enteredBy    String? // Name/ID of the user who entered the historical record
+  enteredDate  DateTime? // When the historical record was entered (audit)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rescheduleRequests RescheduleRequest[]
+
+  // therapistId/roomId are plain strings (not relations), and date is the
+  // primary range filter on nearly every appointment/dashboard/sessions
+  // query — none of these had a supporting index.
+  @@index([therapistId])
+  @@index([roomId])
+  @@index([date])
+  @@index([organizationId])
+}
+
+// A parent asking for an upcoming appointment to be moved. The parent can
+// only ask; the slot is changed by staff through the normal reschedule
+// (PUT /api/appointments), which marks the pending request approved.
+model RescheduleRequest {
+  id             String      @id @default(cuid())
+  organizationId String?
+  appointmentId  String
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  patientId      String
+  requestedBy    String // parent User.id
+  reason         String      @db.Text
+  preferredDate  DateTime?
+  preferredTime  String? // "HH:MM"
+  status         String      @default("pending") // pending, approved, declined, cancelled
+  responseNote   String?     @db.Text // staff's reason when declining
+  respondedBy    String? // staff User.name
+  respondedAt    DateTime?
+  createdAt      DateTime    @default(now())
+
+  @@index([organizationId, status])
+  @@index([appointmentId])
+}
+
+// ============ PACKAGE MANAGEMENT ============
+
+model Package {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  name            String
+  branchId        String?
+  branch          Branch?       @relation(fields: [branchId], references: [id])
+  // Legacy single-type fields — kept as the summary/first block so every
+  // existing Package row (created before multi-type bundles existed) keeps
+  // working unchanged. When `therapyTypes` has rows, the package is a
+  // multi-type bundle and these two fields mirror the FIRST block (for any
+  // older UI/report that still reads them directly).
+  therapyType     String
+  sessionCount    Int
+  sessionDuration Int // in minutes
+  amount          Float
+  discount        Float         @default(0)
+  validityDays    Int
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Multi-therapy-type bundle lines (e.g. Speech x10, OT x5, ABA x8). Empty
+  // for a plain single-type package.
+  therapyTypes    PackageTherapyType[]
+  patientPackages PatientPackage[]
+  // Payroll Engine — rate rows scoped to sessions from this package template.
+  therapistRates           TherapistRate[]
+  organizationDefaultRates OrganizationDefaultRate[]
+
+  @@index([organizationId])
+}
+
+// One therapy-type line within a bundled Package template
+// (e.g. "Speech Therapy — 10 sessions" inside a multi-type package).
+model PackageTherapyType {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  packageId       String
+  package         Package       @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  therapyType     String
+  sessionCount    Int
+  sessionDuration Int? // overrides Package.sessionDuration when set
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+model PatientPackage {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  patientId      String
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  packageId      String
+  package        Package       @relation(fields: [packageId], references: [id])
+
+  // ── Assignment-level fields (snapshot from template, editable per-assignment) ──
+  // These make each PatientPackage fully independent — editing one patient's
+  // assignment never affects any other patient's assignment (or the template).
+  // For a multi-type bundle, these mirror the FIRST block/totals (see
+  // therapyTypeBlocks for the real per-type breakdown).
+  name            String?
+  therapyType     String?
+  sessionDuration Int?
+  validityDays    Int?
+
+  sessionsPurchased Int
+  sessionsCompleted Int      @default(0)
+  sessionsExpired   Int      @default(0)
+  totalAmount       Float
+  discountAmount    Float    @default(0)
+  netAmount         Float
+  startDate         DateTime
+  endDate           DateTime
+  status            String   @default("active") // active, expired, completed
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Per-therapy-type breakdown for a bundled assignment (mirrors
+  // Package.therapyTypes at assignment time). Empty for a plain
+  // single-type assignment.
+  therapyTypeBlocks PatientPackageTherapyType[]
+  appointments      Appointment[]
+  payments          Payment[]
+
+  @@index([organizationId])
+}
+
+// One therapy-type block within a patient's bundled package assignment —
+// tracks that specific type's own session count/completed/expired so a
+// Speech Therapy session completing never decrements the OT block, etc.
+model PatientPackageTherapyType {
+  id                String         @id @default(cuid())
+  organizationId    String?
+  organization      Organization?  @relation(fields: [organizationId], references: [id])
+  patientPackageId  String
+  patientPackage    PatientPackage @relation(fields: [patientPackageId], references: [id], onDelete: Cascade)
+  therapyType       String
+  sessionsPurchased Int
+  sessionsCompleted Int            @default(0)
+  sessionsExpired   Int            @default(0)
+  sessionDuration   Int?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  appointments Appointment[]
+
+  @@index([organizationId])
+}
+
+// ============ THERAPY SESSION MANAGEMENT ============
+
+model TherapySession {
+  id               String        @id @default(cuid())
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id])
+  patientId        String
+  patient          Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patientPackageId String?
+  appointmentId    String? // Linked Appointment ID (bi-directional sync)
+  therapistName    String?
+  therapyType      String?
+  date             DateTime
+  startTime        String?
+  endTime          String?
+  status           String        @default("planned") // planned, in_progress, completed, cancelled, no_show, rescheduled
+  subjective       String? // SOAP - S
+  objective        String? // SOAP - O
+  assessment       String? // SOAP - A
+  plan             String? // SOAP - P
+  notes            String?
+  progressReport   String?
+  actualDuration   Int? // Actual session duration in minutes
+  // ── Pay-per-session billing ──
+  // Patients who buy no package are charged per session. `fee` is what this
+  // one session costs; `invoiceId` is the invoice raised for it, so the
+  // charge shows up in Billing like any other and can be paid there.
+  fee              Float?
+  invoiceId        String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([date])
+  @@index([status])
+  @@index([therapistName])
+  @@index([organizationId])
+}
+
+// ============ ASSESSMENT MANAGEMENT ============
+
+model Assessment {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  patientId       String
+  patient         Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  type            String // assessment type label (e.g. "Speech Assessment")
+  scheduledDate   DateTime
+  scheduledTime   String? // "HH:mm" time slot
+  completedDate   DateTime?
+  status          String        @default("scheduled") // scheduled, draft, completed, cancelled
+  therapistName   String?
+  findings        String?
+  recommendations String?
+  reportUrl       String?
+  notes           String?
+
+  // ── Scheduling context (set by Super Admin) ──
+  reason       String? // Reason for Assessment
+  instructions String? // Instructions for Therapist
+  scheduledBy  String? // Name of the Super Admin who scheduled
+
+  // ── Therapist assessment form fields ──
+  diagnosis          String? // Therapist-entered diagnosis for this assessment
+  history            String? // Relevant history noted by the therapist for this assessment
+  observations       String? // JSON: { eyeContact, attention, behaviour, communication, fineMotor, grossMotor, sensory }
+  therapistNotes     String?
+  treatmentPlan      String?
+  goals              String?
+  recommendation     String? // Dropdown value
+  nextAssessmentDate DateTime?
+  attachments        String? // JSON array of file paths
+
+  // ── Completion tracking ──
+  completedBy String? // Name of therapist who completed
+  completedAt DateTime?
+
+  // ── Historical data entry (migration mode) ──
+  // Allows back-dating assessments for records that predate the system.
+  isHistorical Boolean   @default(false)
+  enteredBy    String? // Name/ID of the user who entered the historical record
+  enteredDate  DateTime? // When the historical record was entered (audit)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([type])
+  @@index([scheduledDate])
+  @@index([organizationId])
+}
+
+// ============ BILLING & INVOICE MANAGEMENT ============
+
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  invoiceNo      String // Auto generated INV-0001… — unique PER ORGANIZATION (compound below)
+  patientId      String
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id])
+  date           DateTime      @default(now())
+  type           String        @default("invoice") // invoice, receipt, advance_receipt, final_receipt
+  subtotal       Float         @default(0)
+  discount       Float         @default(0)
+  gstApplicable  Boolean       @default(false)
+  cgst           Float         @default(0)
+  sgst           Float         @default(0)
+  gstNumber      String?
+  totalAmount    Float         @default(0)
+  amountPaid     Float         @default(0)
+  balanceDue     Float         @default(0)
+  paymentMode    String? // cash, upi, card, bank_transfer, cheque
+  status         String        @default("pending") // pending, paid, partially_paid, overdue
+  notes          String?
+  // Soft-delete only — set when the owning patient is deleted. Invoices are
+  // never hard-deleted so financial/audit history survives patient removal;
+  // the db client's query extension (src/lib/db.ts) hides deletedAt rows
+  // from normal listings/aggregates automatically.
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  invoiceItems InvoiceItem[]
+
+  @@unique([organizationId, invoiceNo])
+  @@index([date])
+  @@index([status])
+  @@index([organizationId])
+}
+
+model InvoiceItem {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  invoiceId      String
+  invoice        Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // "package" | "service" | "custom" — package rows reference a
+  // PatientPackage (referenceId), service rows reference a Service (Services
+  // Master, referenceId), custom rows have no referenceId at all.
+  type           String        @default("service")
+  referenceId    String?
+  description    String
+  quantity       Int           @default(1)
+  rate           Float
+  amount         Float
+
+  @@index([organizationId])
+}
+
+// ============ SERVICES MASTER ============
+// Billable services (Consultation Fee, Assessment Fee, etc.) selectable on an
+// invoice alongside a patient's package. Kept separate from Package so a
+// service can be billed standalone without requiring a therapy package.
+model Service {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  name           String        @unique
+  defaultPrice   Float         @default(0)
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+// ============ PAYMENT MANAGEMENT ============
+
+model Payment {
+  id               String          @id @default(cuid())
+  organizationId   String?
+  organization     Organization?   @relation(fields: [organizationId], references: [id])
+  // Auto generated like PAY-0001... — unique PER ORGANIZATION (compound
+  // below), same reasoning as Patient.patientId/Invoice.invoiceNo: a global
+  // unique made every second clinic's first payment collide with clinic
+  // #1's PAY-0001 (multi-tenant numbering bug).
+  paymentNo        String
+  patientId        String
+  patient          Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  branchId         String?
+  branch           Branch?         @relation(fields: [branchId], references: [id])
+  invoiceId        String?
+  patientPackageId String? // Links payment to a specific PatientPackage assignment
+  patientPackage   PatientPackage? @relation(fields: [patientPackageId], references: [id], onDelete: SetNull)
+  amount           Float
+  paymentMode      String // cash, upi, card, bank_transfer, cheque
+  referenceNo      String?
+  date             DateTime        @default(now())
+  type             String          @default("payment") // payment, advance, refund
+  status           String          @default("completed") // completed, failed, refunded
+  notes            String?
+  // Soft-delete only — see Invoice.deletedAt comment above.
+  deletedAt        DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  // invoiceId is looked up frequently (recalculating balance on payment
+  // create/delete) but isn't a real Prisma relation, so it had no index at
+  // all. Not promoted to a full @relation here — some historical rows may
+  // reference an invoice that's since been archived/removed, and adding a
+  // foreign-key constraint retroactively risks failing on that existing data.
+  @@unique([organizationId, paymentNo])
+  @@index([invoiceId])
+  @@index([organizationId])
+}
+
+// ============ HR MANAGEMENT ============
+
+model Employee {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  employeeId     String // EMP-0001… — unique PER ORGANIZATION (compound below)
+  // Login account link (nullable — most employees have no portal login).
+  // Replaces the fragile fuzzy name-matching between Employee and User:
+  // set when a login is created together with the employee record.
+  userId         String?       @unique
+  user           User?         @relation(fields: [userId], references: [id])
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id])
+  name           String
+  designation    String?
+  department     String? // therapy, admin, hr, accounts
+  mobile         String
+  email          String?
+  joinDate       DateTime?
+  basicSalary    Float         @default(0)
+  hra            Float         @default(0)
+  allowances     Float         @default(0)
+  status         String        @default("active") // active, resigned, terminated, notice_period
+  photo          String?
+  aadhaar        String?
+  pan            String?
+  resumeUrl      String?
+  address        String?
+  bankName       String?
+  bankAccount    String?
+  bankIfsc       String?
+  // ── Payroll Engine ──
+  // null = inherit CenterSettings.payrollSalaryMode for this organization.
+  paymentType    String? // MONTHLY | PER_SESSION | HYBRID
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  leaveRecords      Leave[]
+  payrollRecords    PayrollRecord[]
+  attendanceRecords Attendance[]
+  documents         EmployeeDocument[]
+  therapistRates    TherapistRate[]
+  therapistEarnings TherapistEarning[]
+  // Forward-compat hook — see TherapistRate.doctorId comment. Nothing sets
+  // this yet (no doctor-commission feature built), but the relation exists
+  // so that future feature is additive, not a schema rewrite.
+  ratesAsDoctor     TherapistRate[]    @relation("TherapistRateDoctor")
+
+  @@unique([organizationId, employeeId])
+  @@index([organizationId])
+}
+
+// Text record for an employee's document/credential (e.g. Aadhaar number,
+// PAN number, degree details) — typed in and edited directly, no file
+// upload. One row per [employeeId, label] (predefined labels are
+// upserted-by-label; "Any Other Documents" custom labels can repeat freely).
+model EmployeeDocument {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  employeeId     String
+  employee       Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  label          String // e.g. "Aadhaar Card", "PAN Card", "Degree Certificate", "Experience Certificate", "Offer Letter", "Joining Documents", or a custom label for "Any Other Documents"
+  value          String // the typed-in text (number, reference, details, etc.)
+  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime      @default(now())
+
+  @@index([employeeId])
+  @@index([organizationId])
+}
+
+// ============ ATTENDANCE MANAGEMENT ============
+
+model Attendance {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  employeeId     String
+  employee       Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date           DateTime
+  status         String        @default("present") // present, absent, half_day, leave, holiday
+  checkIn        String? // "09:00"
+  checkOut       String? // "18:00"
+  workingHours   Float? // 9.0
+  overtime       Float? // 0.0
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([date])
+  @@index([organizationId])
+}
+
+// ============ LEAVE MANAGEMENT ============
+
+model Leave {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  employeeId     String
+  employee       Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType      String // casual, sick, earned, maternity, unpaid
+  startDate      DateTime
+  endDate        DateTime
+  totalDays      Float         @default(1)
+  reason         String?
+  status         String        @default("pending") // pending, approved, rejected, cancelled
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+// Super Admin-configurable policy per leave type (Leave Management ▸ Leave
+// Policy Settings) — sits ON TOP OF the existing Leave.leaveType free-text
+// values (casual/sick/earned/maternity/unpaid/government); it does NOT
+// introduce a new leave-type catalog and Leave.leaveType is unchanged. One
+// row per leaveType, optionally overridden per branch (branchId: null =
+// the global default every branch falls back to). Replaces what used to be
+// hardcoded allowance constants duplicated across LeavesPage.tsx and
+// EmployeesPage.tsx with a single, Super-Admin-editable source of truth.
+model LeavePolicy {
+  id                  String        @id @default(cuid())
+  organizationId      String?
+  organization        Organization? @relation(fields: [organizationId], references: [id])
+  leaveType           String // matches Leave.leaveType values — no FK, same free-text convention
+  branchId            String?
+  branch              Branch?       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  annualLimit         Int? // days/year; null = unlimited (e.g. unpaid, government)
+  monthlyLimit        Int? // days/month; null = no monthly cap
+  carryForwardAllowed Boolean       @default(false)
+  maxCarryForwardDays Int? // only meaningful when carryForwardAllowed is true
+  isPaid              Boolean       @default(true)
+  requiresApproval    Boolean       @default(true)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@unique([leaveType, branchId])
+  @@index([organizationId])
+}
+
+// ============ PAYROLL MANAGEMENT ============
+
+model PayrollRecord {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  employeeId      String
+  employee        Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  month           Int // 1-12
+  year            Int
+  basicSalary     Float         @default(0)
+  hra             Float         @default(0)
+  allowances      Float         @default(0)
+  incentives      Float         @default(0)
+  bonus           Float         @default(0)
+  // Sum of TherapistEarning rows folded in at generate time (Payroll Engine).
+  // Always 0 for employees on a pure MONTHLY payment type — no behavior
+  // change for existing monthly-only clinics.
+  sessionEarnings Float         @default(0)
+  totalEarnings   Float         @default(0)
+  leaveDeduction  Float         @default(0)
+  pf              Float         @default(0)
+  esi             Float         @default(0)
+  professionalTax Float         @default(0)
+  advanceRecovery Float         @default(0)
+  tds             Float         @default(0) // Tax Deducted at Source
+  totalDeductions Float         @default(0)
+  netSalary       Float         @default(0)
+  // "unpaid" | "paid" — legacy rows may still hold "draft"/"processed" from
+  // before this was simplified to two states; everywhere that reads this
+  // treats anything other than "paid" as unpaid, so old rows still display
+  // correctly without a backfill being strictly required.
+  status          String        @default("unpaid") // unpaid, paid
+  paidDate        DateTime?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([employeeId, month, year])
+  @@index([organizationId])
+}
+
+// ============ PAYROLL ENGINE (per-session / hybrid therapist salary) ============
+// Additive layer on top of the manual-monthly PayrollRecord above. A clinic
+// that never touches any of this keeps Employee.paymentType = null (inherits
+// CenterSettings.payrollSalaryMode = "MONTHLY"), so TherapistEarning rows are
+// never created and PayrollRecord.sessionEarnings stays 0 — zero behavior
+// change from the pre-existing HR payroll flow.
+
+// Per-therapist custom rate for a given service/therapy type. Falls back to
+// OrganizationDefaultRate when no applicable row exists.
+//
+// Scoping/history dimensions (all optional — a plain [employeeId,
+// serviceType] row with everything else null still works exactly as
+// before): packageId/branchId narrow a rate to a specific package template
+// or branch (most-specific match wins — see resolveRateRow() in
+// src/lib/payroll-accrual.ts); effectiveFrom/effectiveTo let an admin
+// schedule a rate change in advance (e.g. "₹700 starting 1 Aug") without
+// touching history — completed sessions already froze their own rate into
+// TherapistEarning, so this is for FUTURE scheduling, not a requirement for
+// past-session integrity. doctorId is a forward-compat hook (nullable FK to
+// Employee) for a future doctor-commission/referral feature — this app has
+// no "Doctor" entity today (Doctor Consultation is just an assessment type
+// label), so nothing sets or matches on it yet.
+//
+// No @@unique on [employeeId, serviceType] anymore — multiple time-boxed
+// and/or package/branch-scoped rows are valid for the same
+// employee+serviceType simultaneously.
+model TherapistRate {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  employeeId     String
+  employee       Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  serviceType    String // matches Appointment.therapyType, or the sentinel "Assessment"
+  rateType       String        @default("FIXED") // FIXED (flat amount) | PERCENTAGE (0-100, applied to the session's collected amount)
+  rate           Float // flat ₹ amount when rateType=FIXED, percentage (e.g. 50 = 50%) when rateType=PERCENTAGE
+  packageId      String? // scopes this rate to sessions from one specific Package template
+  package        Package?      @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  branchId       String? // scopes this rate to one specific branch
+  branch         Branch?       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  doctorId       String? // forward-compat hook — no UI/resolution wiring yet (see model comment)
+  doctor         Employee?     @relation("TherapistRateDoctor", fields: [doctorId], references: [id], onDelete: SetNull)
+  effectiveFrom  DateTime      @default(now())
+  effectiveTo    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([employeeId, serviceType])
+  @@index([organizationId])
+}
+
+// Organization-wide default rate per service/therapy type — the fallback
+// tier when a therapist has no applicable TherapistRate row of their own.
+// Same rateType/scoping/effective-dating dimensions as TherapistRate, minus
+// employeeId/doctorId (an org default isn't per-therapist).
+model OrganizationDefaultRate {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  serviceType    String
+  rateType       String        @default("FIXED") // FIXED | PERCENTAGE
+  rate           Float
+  packageId      String?
+  package        Package?      @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  effectiveFrom  DateTime      @default(now())
+  effectiveTo    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId, serviceType])
+}
+
+// Accrual ledger — one row is created the moment a session/assessment is
+// marked completed (see src/lib/payroll-accrual.ts), with the rate frozen at
+// that moment so later rate edits never retroactively change history.
+// payrollRecordId is set when a Generate Payroll run folds this row in —
+// that's the "lock": src/app/api/appointments/route.ts and
+// src/app/api/assessments/route.ts refuse to un-complete a session whose
+// earning row is already locked.
+model TherapistEarning {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  employeeId      String
+  employee        Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  sourceType      String // "appointment" | "assessment"
+  sourceId        String // Appointment.id or Assessment.id
+  serviceType     String // snapshot label, e.g. "Speech Therapy" or "Assessment"
+  rateType        String        @default("FIXED") // FIXED | PERCENTAGE — snapshot of which mode was used
+  rate            Float // snapshot: flat amount (FIXED) or percentage value (PERCENTAGE)
+  baseAmount      Float? // the collected/net amount the percentage was applied to — null for FIXED
+  amount          Float // final earned amount either way — everything downstream (payroll sums, dashboards) reads only this
+  sessionDate     DateTime
+  month           Int // 1-12, derived from sessionDate
+  year            Int
+  payrollRecordId String? // set once folded into a generated PayrollRecord
+  createdAt       DateTime @default(now())
+
+  @@unique([sourceType, sourceId])
+  @@index([employeeId, month, year])
+  @@index([payrollRecordId])
+  @@index([organizationId])
+}
+
+// A generated document (invoice, receipt, report) published behind a long
+// random token so it can be sent to a parent over WhatsApp as a plain link —
+// they open it without logging in and it downloads.
+//
+// The token is the only thing protecting it, so it is 32 random bytes and is
+// never listed anywhere public. A link does not expire (clinic's choice);
+// `revokedAt` is how one is switched off, and every open is counted so a
+// leaked link is at least visible.
+model SharedDocument {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  token          String        @unique
+  patientId      String?
+  title          String?
+  fileName       String // what the parent's device saves it as
+  storedName     String // file on disk under public/uploads/shared/
+  createdBy      String? // User.id of the staff member who sent it
+  createdByName  String?
+  downloadCount  Int           @default(0)
+  lastDownloadAt DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId])
+  @@index([patientId])
+}
+
+// ============ EXPENSE MANAGEMENT ============
+
+model Expense {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  branchId        String?
+  branch          Branch?       @relation(fields: [branchId], references: [id])
+  date            DateTime      @default(now())
+  category        String // rent, electricity, internet, salary, marketing, therapy_equipment, stationery, housekeeping, maintenance, travel, training, miscellaneous
+  vendor          String?
+  description     String?
+  amount          Float
+  gst             Float         @default(0)
+  totalAmount     Float
+  paymentMode     String? // cash, upi, card, bank_transfer, cheque
+  billUrl         String?
+  status          String        @default("pending") // pending, approved, rejected
+  approvedBy      String?
+  approvedAt      DateTime?
+  createdByUserId String? // who submitted this expense — used to notify them on approve/reject
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([date])
+  @@index([status])
+  @@index([category])
+  @@index([organizationId])
+}
+
+// ============ WHATSAPP LOGS ============
+
+model WhatsAppLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  patientId      String?
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id])
+  mobile         String
+  template       String
+  message        String
+  status         String        @default("sent") // sent, delivered, read, failed
+  sentAt         DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+
+  @@index([patientId])
+  @@index([organizationId])
+}
+
+// ============ LEAD/INQUIRY ============
+
+model Lead {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id])
+  name           String
+  mobile         String
+  email          String?
+  childName      String?
+  childAge       String?
+  concern        String?
+  source         String? // doctor, school, parent_reference, social_media, advertisement, website, walk_in
+  status         String        @default("new") // new, contacted, interested, registered, lost
+  notes          String?
+  assignedTo     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+// ============ ACTION LOG (standardized action + notes workflow) ============
+
+model ActionLog {
+  id              String        @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id])
+  module          String // appointments, sessions, assessments, packages, billing, payments, etc.
+  recordId        String // ID of the record the action was performed on
+  actionType      String // reschedule, completed, cancelled, no_show, approved, rejected, etc.
+  notes           String // mandatory notes/reason entered by the user
+  performedBy     String // user ID of the person who performed the action
+  performedByName String // user name (denormalized for easy display)
+  userRole        String // role of the user (super_admin, admin, therapist_*, etc.)
+  timestamp       DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([module, recordId])
+  @@index([performedBy])
+  @@index([organizationId])
+}
+
+// ============ SYSTEM CONFIGURATION (Task 12 — dynamic, admin-managed) ============
+
+model SystemConfig {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  category       String
+  key            String
+  label          String
+  color          String?
+  sortOrder      Int           @default(0)
+  isActive       Boolean       @default(true)
+  metadata       String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Scoped to the organization: two clinics must be able to define the same
+  // key (e.g. therapy type "physiotherapy") independently. A global
+  // [category, key] unique let one clinic's save overwrite another's row.
+  @@unique([organizationId, category, key])
+  @@index([category])
+  @@index([organizationId])
+}
+
+// ============ NOTIFICATIONS ============
+
+model Notification {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  userId         String // recipient User.id
+  type           String // appointment, assessment, payment, general
+  title          String
+  message        String
+  link           String? // AppPage key the bell dropdown should navigate to
+  isRead         Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+
+  @@index([userId, isRead])
+  @@index([organizationId])
+}
+
+// ============ CUSTOM ROLES (admin-defined, in addition to the 9 built-in roles) ============
+
+model Role {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  name           String
+  slug           String        @unique // used as the User.role string value
+  description    String?       @db.Text
+  permissions    Json // [{ module, view, create, edit, delete }, ...]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+// ============ CENTER SETTINGS ============
+
+model CenterSettings {
+  id                   String        @id @default(cuid())
+  organizationId       String?
+  organization         Organization? @relation(fields: [organizationId], references: [id])
+  centerName           String        @default("Your Clinic Name")
+  address              String?
+  phone                String?
+  email                String?
+  gstNumber            String?
+  password             String?
+  // Stored as a base64 data URL (see /api/settings/upload-logo) — plain
+  // `String` maps to MySQL VARCHAR(191) by default, far too short for even
+  // a small base64-encoded image (~1.3x the raw file size). @db.LongText
+  // (up to 4GB) is needed so a logo upload doesn't fail with a truncated
+  // "Data too long for column" error, surfaced to the client as a 500.
+  logo                 String?       @db.LongText
+  // ── Print branding (SaaS white-label) ──
+  // Every clinic uploads its OWN letterhead assets; prints must never fall
+  // back to another clinic's branding or bank details. All images stored as
+  // base64 data URLs (LongText, same reasoning as `logo` above).
+  printHeader          String?       @db.LongText // top band on invoices/reports
+  printFooter          String?       @db.LongText // bottom band
+  letterhead           String?       @db.LongText // full-page background (letterhead mode)
+  signature            String?       @db.LongText // authorized signatory image
+  paymentQr            String?       @db.LongText // scan-and-pay QR on invoices
+  bankName             String?
+  bankBranch           String?
+  bankAccountName      String?
+  bankAccountNumber    String?
+  bankIfsc             String?
+  upiId                String?
+  // ── Historical data entry (migration mode) ──
+  // When enabled, admins can back-date appointments & assessments for
+  // records that predate the system. Off by default.
+  allowHistoricalEntry Boolean       @default(false)
+  // ── Login OTP (email two-step verification) ──
+  // When enabled, every STAFF login for this clinic requires a 6-digit
+  // code emailed via nodemailer (parents excluded — their accounts often
+  // have placeholder emails). DEFAULT ON (product decision 2026-07-09:
+  // all staff/org accounts use real, deliverable emails). A clinic whose
+  // staff emails aren't real yet can be rescued via Platform Admin
+  // impersonation (skips OTP) → Settings → fix emails or toggle off.
+  loginOtpEnabled      Boolean       @default(true)
+  // ── Payroll Engine (org-level default; per-therapist override lives on
+  // Employee.paymentType) ──
+  payrollSalaryMode        String    @default("MONTHLY") // MONTHLY | PER_SESSION | HYBRID
+  payrollLockAfterGenerate Boolean   @default(true)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+// ============ SAAS SUBSCRIPTION ENGINE ============
+// See SAAS-TRANSFORMATION-PLAN.md §4.2. Plan is fully database-driven — no
+// hardcoded tier logic. Platform Admin (a separate model, §4.4 in the plan)
+// creates the Organization + assigns a Plan; limit/feature enforcement reads
+// from here, never from a hardcoded switch on plan name.
+
+model Plan {
+  id             String   @id @default(cuid())
+  name           String // "Basic", "Advance", "Premium", or a custom name
+  tier           String // basic, advance, premium, enterprise, custom — used for sorting/badges only, not for limit logic
+  therapistLimit Int // max users whose role starts with "therapist_" or is "psychologist"
+  branchLimit    Int
+  userLimit      Int // max non-therapist staff users (admin/receptionist/etc.)
+  storageLimitMB Int
+  // WhatsApp is sent manually via WhatsApp Web (WhatsAppLogsPage), not a
+  // metered API — deliberately no quota field; every plan is unlimited.
+  priceMonthly   Float
+  priceYearly    Float
+  // Feature flags, e.g. { "customBranding": false, "whiteLabel": false,
+  // "advancedReports": false, "exportData": true, "apiAccess": false }
+  features       Json
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+// Marketing blog (/blog). Platform-level content, not tenant data — managed
+// by the Platform Admin, publicly readable by anyone (including crawlers).
+// `body` is a tiny markdown-like subset (## h2, ### h3, "- " list items,
+// blank-line-separated paragraphs) parsed at render time in src/lib/blog.ts
+// — avoids a rich block-editor UI for what is, in practice, a plain-text
+// textarea in the admin.
+model BlogPost {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String   @db.Text // meta description + AEO direct-answer opener
+  body        String   @db.Text
+  isPublished Boolean  @default(true)
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Subscription {
+  id                 String       @id @default(cuid())
+  organizationId     String       @unique
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  planId             String
+  plan               Plan         @relation(fields: [planId], references: [id])
+  status             String       @default("trialing") // trialing, active, past_due, suspended, cancelled
+  // Set whenever Platform Admin activates / marks paid with a chosen cycle
+  // (see PATCH .../organizations/[id]). Null for legacy rows predating this,
+  // and while trialing (no cycle has been chosen/paid for yet).
+  billingCycle       String? // monthly, yearly
+  // Manual (v1) provisioning: Platform Admin flips status via "Mark Paid" —
+  // no payment gateway required for launch. paymentProvider/paymentRef stay
+  // null until Razorpay automation (Phase F) is added.
+  paymentProvider    String? // null (manual), razorpay, stripe, ...
+  paymentRef         String? // gateway subscription/order id, once automated
+  currentPeriodStart DateTime     @default(now())
+  currentPeriodEnd   DateTime?
+  trialEndsAt        DateTime?
+  cancelAtPeriodEnd  Boolean      @default(false)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([planId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// PLATFORM LAYER (SaaS) — deliberately OUTSIDE the tenant world.
+// PlatformAdmin is a separate table with its own login and session type
+// (/platform-admin), never mixed into the tenant User table: the tenant
+// guard in src/lib/db.ts only knows organizationId-scoped models, so no
+// Org Admin code path can ever reach platform-level data.
+// ---------------------------------------------------------------------------
+model PlatformAdmin {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  password  String // bcrypt hash
+  name      String
+  isActive  Boolean   @default(true)
+  lastLogin DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+// Sales inquiries from the public landing page (/landing) — prospective
+// clinics asking about the product. Platform layer: no organizationId
+// (these clinics don't exist as tenants yet). followUps is a JSON array of
+// { id, date, by, note, nextDate? } entries, editable from the Platform
+// Admin's Inquiries tab.
+model PlatformInquiry {
+  id          String   @id @default(cuid())
+  clinicName  String
+  contactName String
+  email       String
+  phone       String?
+  city        String?
+  message     String?  @db.Text
+  // new → follow_up → demo → converted | closed
+  status      String   @default("new")
+  followUps   Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}

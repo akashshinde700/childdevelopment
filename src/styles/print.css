@@ -1,0 +1,52 @@
+/* Force color output */
+.lh-print, .lh-print * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+@page { size: A4 portrait; margin: 0; }
+
+/* LetterheadLayout */
+.lh-layout { position: relative; width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+.lh-letterhead-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; z-index: 0; pointer-events: none; user-select: none; }
+.lh-content { position: relative; z-index: 1; padding: 200px 40px 100px 40px; min-height: 297mm; box-sizing: border-box; }
+.lh-no-print { display: revert; }
+
+/* DocumentLayout */
+.doc-layout { position: relative; width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff; box-shadow: 0 4px 24px rgba(0,0,0,0.08); font-family: Arial, sans-serif; color: #1f2937; }
+.doc-letterhead-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; z-index: 0; pointer-events: none; user-select: none; }
+.doc-content { position: relative; z-index: 1; padding: 200px 40px 100px 40px !important; min-height: calc(100vh - 300px); box-sizing: border-box; }
+.doc-report-header { text-align: center; margin-bottom: 18px; word-wrap: break-word; overflow-wrap: break-word; max-width: 100%; }
+.doc-report-header h2 { font-size: 18px; color: #0f766e; margin: 0 0 4px; }
+.doc-report-header p { font-size: 11px; color: #555; margin: 2px 0; word-wrap: break-word; overflow-wrap: break-word; line-height: 1.5; }
+.doc-report-header .address { font-size: 9px; color: #888; word-wrap: break-word; overflow-wrap: break-word; line-height: 1.4; }
+.doc-report-header hr { border: none; border-top: 2px solid #01D3C5; margin: 8px 0 0; }
+.doc-content table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.doc-content th, .doc-content td { border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; vertical-align: top; }
+.doc-content th { background: #f3f4f6; font-weight: 600; color: #374151; }
+.doc-content tr:nth-child(even) { background: #fafafa; }
+.doc-content tfoot tr { background: #e5e7eb !important; font-weight: 700; }
+.doc-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.doc-badge-green { background: #dcfce7; color: #15803d; }
+.doc-badge-yellow { background: #fef9c3; color: #a16207; }
+.doc-badge-red { background: #fee2e2; color: #b91c1c; }
+.doc-badge-gray { background: #f3f4f6; color: #374151; }
+.doc-badge-blue { background: #dbeafe; color: #1d4ed8; }
+.doc-footer-note { text-align: center; color: #9ca3af; font-size: 10px; margin-top: 24px; }
+.doc-page-footer { position: fixed; bottom: 28px; left: 0; right: 0; text-align: center; font-size: 10px; color: #6b7280; z-index: 2; }
+.print-content { position: relative; z-index: 1; padding: 200px 40px 100px 40px !important; min-height: calc(100vh - 300px); box-sizing: border-box; }
+
+@media print {
+  body * { visibility: hidden; }
+  .lh-layout, .lh-layout *, .doc-layout, .doc-layout * { visibility: visible; }
+  .lh-layout { box-shadow: none; margin: 0; width: 100%; min-height: auto; }
+  .lh-letterhead-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100vh; }
+  .lh-content { min-height: auto; }
+  .lh-no-print { display: none !important; }
+  .doc-layout { box-shadow: none; margin: 0; width: 100%; min-height: auto; }
+  .doc-letterhead-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100vh; }
+  .doc-content { padding-top: 200px !important; padding-bottom: 100px !important; padding-left: 40px !important; padding-right: 40px !important; min-height: calc(100vh - 300px); }
+  .doc-page-footer::after { content: "Page " counter(page) " of " counter(pages); }
+  .doc-content thead { display: table-header-group; }
+  .doc-content tfoot { display: table-footer-group; }
+  .doc-content tr { break-inside: avoid; page-break-inside: avoid; }
+  .doc-content table { break-inside: auto; }
+  .lh-content h1, .lh-content h2, .lh-content h3, .lh-content table, .lh-content tr, .lh-content img,
+  .doc-content h1, .doc-content h2, .doc-content h3, .doc-content .doc-signature, .doc-content .doc-summary-card { break-inside: avoid; page-break-inside: avoid; }
+}

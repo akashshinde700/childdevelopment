@@ -1,0 +1,27 @@
+# Never commit — the production server holds these, they are not source.
+.env
+.env.*
+!.env.example
+
+node_modules/
+.next/
+out/
+dist/
+
+# Runtime data on the live box (patient files, sessions, OTP codes)
+public/uploads/
+uploads-backup/
+session-backup/
+.sessions/
+.platform-sessions/
+.platform-otp/
+db-backups/
+
+*.log
+*.pid
+*.tsbuildinfo
+.DS_Store
+
+# Deploy credentials
+deploy_config.json
+deploy.py
