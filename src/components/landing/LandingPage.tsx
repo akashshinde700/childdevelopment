@@ -175,12 +175,14 @@ export default function LandingPage() {
   const [done, setDone] = useState(false)
   const [error, setError] = useState('')
   const [plans, setPlans] = useState<PublicPlan[]>([])
+  const [plansLoaded, setPlansLoaded] = useState(false)
 
   useEffect(() => {
     fetch('/api/public/plans')
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => { if (Array.isArray(data)) setPlans(data) })
       .catch(() => {})
+      .finally(() => setPlansLoaded(true))
   }, [])
 
   async function submit(e: React.FormEvent) {
@@ -303,8 +305,17 @@ export default function LandingPage() {
           <h2 className="text-center text-3xl font-bold">Simple pricing, 7-day free trial</h2>
           <p className="mt-3 text-center text-slate-500">No card needed for the trial. Upgrade or downgrade anytime.</p>
           <div className="mt-12 grid gap-6 md:grid-cols-3">
-            {plans.length === 0 && (
+            {!plansLoaded && plans.length === 0 && (
               <p className="col-span-full text-center text-sm text-slate-400">Loading plans…</p>
+            )}
+            {plansLoaded && plans.length === 0 && (
+              <div className="col-span-full mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white px-8 py-7 text-center shadow-sm">
+                <p className="font-semibold text-slate-800">Current plan details are available on request.</p>
+                <p className="mt-2 text-sm text-slate-500">Book a free demo and we’ll walk you through pricing for your clinic.</p>
+                <a href="#inquiry" className="mt-5 inline-flex rounded-full bg-teal-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-teal-800">
+                  Talk to our team
+                </a>
+              </div>
             )}
             {plans.map((p, i) => (
               <div
