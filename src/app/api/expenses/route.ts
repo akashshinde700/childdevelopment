@@ -133,7 +133,6 @@ export async function PUT(request: NextRequest) {
     if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 })
     const owned = await db.expense.findFirst({ where: { id, organizationId } })
     if (!owned) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    const totalAmount = (data.amount || 0) + (data.gst || 0)
 
     // Normalize on write so category/status never drift into mixed casing —
     // done before any comparison below so every check sees the same value
@@ -141,8 +140,21 @@ export async function PUT(request: NextRequest) {
     if (data.category) data.category = String(data.category).toLowerCase()
     if (data.status) data.status = String(data.status).toLowerCase()
 
+    // Status-only updates must not overwrite the existing total. If either
+    // monetary field changes, combine it with the persisted other field.
+    // Never accept a client-supplied total independently of amount and GST.
+    const updateData: Record<string, unknown> = { ...data }
+    delete updateData.totalAmount
+    for (const field of ['amount', 'gst'] as const) {
+      if (data[field] !== undefined && (typeof data[field] !== 'number' || !Number.isFinite(data[field]) || data[field] < 0)) {
+        return NextResponse.json({ error: `${field} must be a non-negative number` }, { status: 400 })
+      }
+    }
+    if (data.amount !== undefined || data.gst !== undefined) {
+      updateData.totalAmount = (data.amount ?? owned.amount) + (data.gst ?? owned.gst)
+    }
+
     // When approving/rejecting, set approvedBy and approvedAt
-    const updateData: Record<string, unknown> = { ...data, totalAmount }
     if (data.date) updateData.date = new Date(data.date)
     if (data.status === 'approved' || data.status === 'rejected') {
       updateData.approvedBy = user.name
